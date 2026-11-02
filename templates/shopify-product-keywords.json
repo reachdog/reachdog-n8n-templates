@@ -1,0 +1,896 @@
+{
+  "name": "Shopify product to Reach Dog keywords",
+  "nodes": [
+    {
+      "name": "New product",
+      "id": "c033014e-2f2f-4660-a775-000000000001",
+      "type": "n8n-nodes-base.shopifyTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "topic": "products/create"
+      }
+    },
+    {
+      "name": "Configuration",
+      "id": "c033014e-2f2f-4660-a775-000000000002",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "config-0",
+              "name": "api_origin",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-1",
+              "name": "account",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-2",
+              "name": "daily_cap",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-3",
+              "name": "run_label",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-4",
+              "name": "spreadsheet_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Prepare product",
+      "id": "c033014e-2f2f-4660-a775-000000000003",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const cfg = $input.first().json;\nif (!cfg.account.trim() || !cfg.spreadsheet_id.trim() || !/^https:\\/\\/[a-z0-9.-]+(:\\d+)?$/i.test(cfg.api_origin)) throw new Error('Set account, HTTPS API origin and spreadsheet ID');\nif (!/^\\d+$/.test(cfg.daily_cap) || !Number.isSafeInteger(Number(cfg.daily_cap))) throw new Error('Set daily_cap to a nonnegative whole token count');\nconst p = $('New product').first().json;\n// GraphQL ID preserves the full ID even if a webhook JSON number exceeds JS precision.\nconst gid = String(p.admin_graphql_api_id || '').match(/^gid:\\/\\/shopify\\/Product\\/(\\d+)$/);\nconst id = gid?.[1] ?? (Number.isSafeInteger(p.id) || typeof p.id === 'string' ? String(p.id) : '');\nif (!/^\\d+$/.test(id)) throw new Error('Missing lossless Shopify product ID');\nconst client_product_id = 'shopify-' + id;\nif (typeof p.title !== 'string' || !p.title.trim()) return [{json:{excluded:true,client_product_id,status:'excluded: missing title'}}];\nconst body = {client_product_id, title:p.title, parameters:['search_phrases','search_volume']};\nif (typeof p.body_html === 'string' && p.body_html.trim()) body.description = p.body_html;\nfunction sorted(v) {\n  if (Array.isArray(v)) return v.map(sorted);\n  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])]));\n  return v;\n}\nreturn [{json:{excluded:false,body,canonical:JSON.stringify(sorted({client_product_id,body,run_label:cfg.run_label}))}}];"
+      }
+    },
+    {
+      "name": "Eligible product?",
+      "id": "c033014e-2f2f-4660-a775-000000000004",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ !$json.excluded }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Hash request",
+      "id": "c033014e-2f2f-4660-a775-000000000005",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        800,
+        0
+      ],
+      "parameters": {
+        "action": "hash",
+        "type": "SHA256",
+        "value": "={{ $json.canonical }}",
+        "dataPropertyName": "digest",
+        "encoding": "hex"
+      }
+    },
+    {
+      "name": "Usage",
+      "id": "c033014e-2f2f-4660-a775-000000000006",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Configuration').first().json.api_origin + '/v1/usage' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body", "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Classify Usage",
+      "id": "c033014e-2f2f-4660-a775-000000000007",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst status = Number(r.statusCode || 0);\nconst transient = (!status && !!r.error) || [500,502,503,504].includes(status);\nconst value = r.headers?.['retry-after'];\nconst seconds = value == null ? 2 ** ($runIndex + 1) : /^\\d+(\\.\\d+)?$/.test(String(value)) ? Number(value) : Math.max(0, (Date.parse(value) - Date.now()) / 1000);\nreturn [{json:{...r, attempts:$runIndex + 1, retry:transient && $runIndex < 3 && Number.isFinite(seconds) && seconds <= 60, delay:Math.max(1, Math.ceil(seconds || 1))}}];"
+      }
+    },
+    {
+      "name": "Retry Usage?",
+      "id": "c033014e-2f2f-4660-a775-000000000008",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.retry }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Wait for Usage",
+      "id": "c033014e-2f2f-4660-a775-000000000009",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1360,
+        -180
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.delay }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Estimate",
+      "id": "c033014e-2f2f-4660-a775-000000000010",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nif (r.statusCode !== 200) throw new Error('Usage unavailable: ' + (r.statusCode || 'transport error'));\nconst price = JSON.parse(r.body).parameter_price;\nif (typeof price !== 'number' || !Number.isFinite(price) || price < 0) throw new Error('no price available for this account');\nreturn [{json:{estimate:2 * price}}];"
+      }
+    },
+    {
+      "name": "Reserve budget",
+      "id": "c033014e-2f2f-4660-a775-000000000011",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1800,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM rd_keywords.reserve($1,$2,$3,$4,$5)",
+        "options": {
+          "queryReplacement": "={{ [$('Configuration').first().json.account, 'rdn8n-keywords-' + $('Hash request').first().json.digest, String($execution.id), $json.estimate, $('Configuration').first().json.daily_cap] }}"
+        }
+      }
+    },
+    {
+      "name": "Admitted?",
+      "id": "c033014e-2f2f-4660-a775-000000000012",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.decision === 'send' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Title match",
+      "id": "c033014e-2f2f-4660-a775-000000000013",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Configuration').first().json.api_origin + '/v1/title-matches' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'rdn8n-keywords-' + $('Hash request').first().json.digest }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Prepare product').first().json.body }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body", "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Classify Title match",
+      "id": "c033014e-2f2f-4660-a775-000000000014",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst status = Number(r.statusCode || 0);\nconst transient = (!status && !!r.error) || [500,502,503,504].includes(status);\nconst value = r.headers?.['retry-after'];\nconst seconds = value == null ? 2 ** ($runIndex + 1) : /^\\d+(\\.\\d+)?$/.test(String(value)) ? Number(value) : Math.max(0, (Date.parse(value) - Date.now()) / 1000);\nreturn [{json:{...r, attempts:$runIndex + 1, retry:transient && $runIndex < 3 && Number.isFinite(seconds) && seconds <= 60, delay:Math.max(1, Math.ceil(seconds || 1))}}];"
+      }
+    },
+    {
+      "name": "Retry Title match?",
+      "id": "c033014e-2f2f-4660-a775-000000000015",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2600,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.retry }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Wait for Title match",
+      "id": "c033014e-2f2f-4660-a775-000000000016",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2600,
+        -180
+      ],
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.delay }}",
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "Interpret receipt",
+      "id": "c033014e-2f2f-4660-a775-000000000017",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2820,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst product = $('Prepare product').first().json.body;\nconst headers = r.headers || {};\nconst receipt = headers['x-charged-tokens'];\nconst settled = headers['x-charge-state'] === 'settled' && /^\\d+$/.test(String(receipt));\nlet body;\ntry { body = JSON.parse(r.body); } catch { body = null; }\nconst ok = r.statusCode >= 200 && r.statusCode < 300;\nconst knownRejection = r.attempts === 1 && ['quota_exceeded','concurrency_exceeded','idempotency_required','invalid_selection','insufficient_credits','wallet_frozen'].includes(body?.code) && r.statusCode >= 400 && r.statusCode < 500 && headers['x-charge-state'] !== 'pending';\nconst state = settled ? 'settled' : knownRejection ? 'released' : 'held';\nconst complete = ok && body?.search_phrases !== undefined && body?.search_volume !== undefined;\nconst row = {client_product_id:product.client_product_id,title:product.title,\n search_phrases:complete ? JSON.stringify(body.search_phrases) : '',search_volume:complete ? JSON.stringify(body.search_volume) : '',\n charge_state:headers['x-charge-state'] || state,charged_tokens:settled ? String(receipt) : '',\n status:complete && settled ? 'completed' : (body?.code || (complete ? 'receipt pending' : 'request failed or response incomplete'))};\nif (r.statusCode === 410) row.status += ': set a new run_label after reconciling the prior operation';\nreturn [{json:{state,amount:settled ? String(receipt) : '0',row}}];"
+      }
+    },
+    {
+      "name": "Record outcome",
+      "id": "c033014e-2f2f-4660-a775-000000000018",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3020,
+        0
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT rd_keywords.finish($1,$2,$3,$4,$5,$6::jsonb) AS sheet_row",
+        "options": {
+          "queryReplacement": "={{ [$('Configuration').first().json.account, 'rdn8n-keywords-' + $('Hash request').first().json.digest, String($execution.id), $json.state, $json.amount, JSON.stringify($json.row)] }}"
+        }
+      }
+    },
+    {
+      "name": "Output row",
+      "id": "c033014e-2f2f-4660-a775-000000000019",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "return [{json:$input.first().json.sheet_row}];"
+      }
+    },
+    {
+      "name": "Handle existing or capped",
+      "id": "c033014e-2f2f-4660-a775-000000000020",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        280
+      ],
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nif (result.decision === 'settled' && result.cached_row) return [{json:result.cached_row}];\nif (result.decision === 'held') throw new Error('Existing reservation: reconcile the original execution before retrying');\nif (result.decision !== 'cap') throw new Error('Unexpected reservation outcome');\nconst p = $('Prepare product').first().json.body;\nreturn [{json:{client_product_id:p.client_product_id,title:p.title,search_phrases:'',search_volume:'',charge_state:'skipped',charged_tokens:'',status:'skipped: daily cap reached'}}];"
+      }
+    },
+    {
+      "name": "Write keywords",
+      "id": "c033014e-2f2f-4660-a775-000000000021",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        3440,
+        100
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Keywords",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "client_product_id": "={{ $json.client_product_id }}",
+            "title": "={{ $json.title }}",
+            "search_phrases": "={{ $json.search_phrases }}",
+            "search_volume": "={{ $json.search_volume }}",
+            "charge_state": "={{ $json.charge_state }}",
+            "charged_tokens": "={{ $json.charged_tokens }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "client_product_id"
+          ],
+          "schema": [
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search_phrases",
+              "displayName": "search_phrases",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search_volume",
+              "displayName": "search_volume",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "charge_state",
+              "displayName": "charge_state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "charged_tokens",
+              "displayName": "charged_tokens",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      }
+    },
+    {
+      "name": "Write excluded",
+      "id": "c033014e-2f2f-4660-a775-000000000022",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "position": [
+        820,
+        280
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Excluded",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "client_product_id": "={{ $json.client_product_id }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "client_product_id"
+          ],
+          "schema": [
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      }
+    },
+    {
+      "name": "Setup and operation",
+      "id": "c033014e-2f2f-4660-a775-000000000023",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -410
+      ],
+      "parameters": {
+        "content": "## Shopify product keywords\nConnect a Shopify store, your Reach Dog header credential, PostgreSQL and Google Sheets. In Configuration enter the trusted API origin, a stable billing account label, a daily cap and the spreadsheet ID. Install the SQL from this repository before enabling the trigger. Create Keywords and Excluded tabs using the headers in the README. Each new product requests search phrases and search volume. The workflow reserves two parameter prices against the current UTC admission day before sending the paid request. If the remaining allowance is too small, the Keywords tab records a skip. A missing receipt or interrupted execution can leave a reservation held. Check the original execution and payment receipt before taking recovery action.",
+        "height": 340,
+        "width": 550
+      }
+    },
+    {
+      "name": "Budget checkpoint",
+      "id": "c033014e-2f2f-4660-a775-000000000024",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        -155
+      ],
+      "parameters": {
+        "content": "A committed reservation is required to reach Title match. Replayed events reuse the saved row or stop while payment is uncertain.",
+        "height": 110,
+        "width": 460
+      }
+    }
+  ],
+  "connections": {
+    "Usage": {
+      "main": [
+        [
+          {
+            "node": "Classify Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Usage": {
+      "main": [
+        [
+          {
+            "node": "Retry Usage?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Usage?": {
+      "main": [
+        [
+          {
+            "node": "Wait for Usage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Estimate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Usage": {
+      "main": [
+        [
+          {
+            "node": "Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Title match": {
+      "main": [
+        [
+          {
+            "node": "Classify Title match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Title match": {
+      "main": [
+        [
+          {
+            "node": "Retry Title match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Title match?": {
+      "main": [
+        [
+          {
+            "node": "Wait for Title match",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Interpret receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Title match": {
+      "main": [
+        [
+          {
+            "node": "Title match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New product": {
+      "main": [
+        [
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuration": {
+      "main": [
+        [
+          {
+            "node": "Prepare product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare product": {
+      "main": [
+        [
+          {
+            "node": "Eligible product?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eligible product?": {
+      "main": [
+        [
+          {
+            "node": "Hash request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write excluded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash request": {
+      "main": [
+        [
+          {
+            "node": "Usage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estimate": {
+      "main": [
+        [
+          {
+            "node": "Reserve budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve budget": {
+      "main": [
+        [
+          {
+            "node": "Admitted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Admitted?": {
+      "main": [
+        [
+          {
+            "node": "Title match",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle existing or capped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle existing or capped": {
+      "main": [
+        [
+          {
+            "node": "Write keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpret receipt": {
+      "main": [
+        [
+          {
+            "node": "Record outcome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record outcome": {
+      "main": [
+        [
+          {
+            "node": "Output row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output row": {
+      "main": [
+        [
+          {
+            "node": "Write keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
