@@ -24,3 +24,17 @@ For a held operation, inspect the original execution and reconcile its request k
 Run `npm ci` and `npm test` with Node 22 or newer. The tests create a disposable PostgreSQL instance, exercise independent database connections, and run the workflow's retry and receipt code. No service credentials are needed.
 
 For the n8n integration test, point `node tests/n8n-smoke.mjs PATH_TO_N8N_BIN` at a local n8n CLI JavaScript entry point (tested with n8n 2.45.7 and Node 24). The test imports the original workflow into a fresh profile, then runs a copy with loopback HTTP substitutes for Shopify, Reach Dog and Sheets. It forces a failed sheet write after payment, replays that product, and attempts a second product at the exhausted cap.
+
+## Shopify catalog groups (Template 1)
+
+Import `templates/shopify-catalog-groups.json`. Configure the API origin and spreadsheet ID in Configuration. Connect the Shopify, HTTP Header Auth (Authorization: Bearer) and Google Sheets credentials. Create Groups with columns `client_product_id,title,group_id,group_label,ungrouped`, Excluded with `source_row,client_product_id,reason`, and Errors with `batch_id,error`.
+
+Run manually, open the waiting execution's form link, review the server quote and select Approve to accept that batch. The template stops before submitting a store with more than 500 products. Groups are joined across all pages. A product in several groups has its group IDs and labels separated by semicolons on the same row.
+
+## Product feed audit (Template 2)
+
+Import `templates/product-feed-audit.json`. Set the API origin and spreadsheet ID and connect the Reach Dog header credential and Google Sheets credentials. Feed uses `client_product_id,title,description`. Audit uses `client_product_id,title,product_type,missing_attributes,taxonomy_mappings,charge_state,charged_tokens,error`. Excluded uses the same columns as Template 1.
+
+Review the estimate for the valid rows in the waiting execution's form. Approve permits the serial paid loop. A failed row is written before processing stops. Rerun with the same configuration to recover completed rows by request key. Protect access to the execution-specific approval link. The form defaults to Reject and expires after 15 minutes.
+
+For both templates, keep the workflow inactive during verification. Use `npm test` for the budget, form decision, paging and retry scenarios. With a local n8n installation, run `node tests/approval-smoke.mjs PATH_TO_N8N_BIN` to import both templates and exercise the graphs with mock sources, form decisions, APIs and sheets. After operator sign-off, connect a dev store and test spreadsheet and compare the catalog's settled quote and feed rows' settlement headers to the amounts shown.
