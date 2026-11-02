@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -54,7 +55,7 @@ test('reservations survive a failed execution and serialize concurrent admission
     await db.connect();
     return db;
   };
-  const first = await connect(), second = await connect();
+  const first = await connect(), second = await connect(), observer = await connect();
   let disconnected = false;
   try {
     await first.query(await readFile(new URL('../sql/template3-budget.sql',import.meta.url),'utf8'));
@@ -65,10 +66,26 @@ test('reservations survive a failed execution and serialize concurrent admission
       second.query(node('Record outcome').parameters.query,['account',key(id),owner,state,amount,JSON.stringify(row)]);
     await first.query('BEGIN');
     assert.equal((await reserve(first,'a','first')).decision,'send');
-    // The second worker issues a real query while the first reservation is uncommitted.
     const competing = reserve(second,'b','second');
-    await first.query('COMMIT');
-    assert.equal((await competing).decision,'cap');
+    try {
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const {rows:[activity]} = await Promise.race([
+          observer.query('SELECT wait_event_type, pg_blocking_pids(pid) AS blockers FROM pg_stat_activity WHERE pid=$1',
+            [second.processID]),
+          competing.then(row => assert.fail('B finished before waiting for A: ' + row.decision))
+        ]);
+        if (activity.wait_event_type === 'Lock' && activity.blockers.includes(first.processID)) break;
+        assert.ok(Date.now() < deadline, 'B never waited on a lock held by A');
+        await delay(10);
+      }
+      await first.query('COMMIT');
+      assert.equal((await competing).decision,'cap');
+    } finally {
+      // Unblock B even if a lock assertion failed with A still in its transaction.
+      if (first.getTransactionStatus() === 'T') await first.query('ROLLBACK');
+      await competing;
+    }
     await first.end(); disconnected = true; // Worker disappears after sending the paid request, before saving the receipt.
     assert.equal((await reserve(second,'a','duplicate')).decision,'held');
     assert.equal((await reserve(second,'c','third')).decision,'cap');
@@ -86,5 +103,6 @@ test('reservations survive a failed execution and serialize concurrent admission
   } finally {
     if (!disconnected) await first.end();
     await second.end();
+    await observer.end();
   }
 });
