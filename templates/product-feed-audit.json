@@ -1,0 +1,733 @@
+{
+  "name": "Product feed audit to sheet",
+  "nodes": [
+    {
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [0, 0],
+      "id": "ac025390-0001-4000-a001-000000000001"
+    },
+    {
+      "name": "Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "config-0",
+              "name": "api_origin",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-3",
+              "name": "run_label",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-4",
+              "name": "spreadsheet_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "position": [190, 0],
+      "id": "ac025390-0001-4000-a001-000000000002"
+    },
+    {
+      "name": "Read source",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Feed",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "position": [380, 0],
+      "id": "ac025390-0001-4000-a001-000000000003"
+    },
+    {
+      "name": "Prepare input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const cfg=$('Configuration').first().json;\nif(!/^https:\\/\\/[a-z0-9.-]+(:\\d+)?$/i.test(cfg.api_origin)||!cfg.spreadsheet_id.trim())throw new Error('Set HTTPS API origin and spreadsheet ID');\nconst rows=$input.all().map(x=>x.json),records=[],excluded=[];\nconst counts=new Map();\nfor(const row of rows){const id=String(row.client_product_id??'').trim();counts.set(id,(counts.get(id)||0)+1);}\nfor(const [i,row] of rows.entries()){\n const client_product_id=String(row.client_product_id??'').trim();\n const reason=!client_product_id?'missing ID':counts.get(client_product_id)>1?'duplicate ID':!row.title?.trim()?'missing title':null;\n if(reason){excluded.push({source_row:String(row.row_number??i+2),client_product_id,reason});continue;}\n const body={client_product_id,title:row.title,parameters:['missing_attributes','taxonomy_mappings','product_type']};\n if(row.description)body.description=String(row.description);records.push(body);}\nreturn [{json:{records,excluded,index:0}}];"
+      },
+      "position": [580, 0],
+      "id": "ac025390-0001-4000-a001-000000000004"
+    },
+    {
+      "name": "Excluded rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return $input.first().json.excluded.map(json=>({json}));"
+      },
+      "position": [800, 290],
+      "id": "ac025390-0001-4000-a001-000000000005"
+    },
+    {
+      "name": "Write exclusions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Excluded",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_row": "={{ $json.source_row }}",
+            "client_product_id": "={{ $json.client_product_id }}",
+            "reason": "={{ $json.reason }}"
+          },
+          "matchingColumns": [
+            "source_row"
+          ],
+          "schema": [
+            {
+              "id": "source_row",
+              "displayName": "source_row",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "position": [1010, 290],
+      "id": "ac025390-0001-4000-a001-000000000006"
+    },
+    {
+      "name": "Begin request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$input.first().json; if(!s.records.length)return [];delete s.excluded;s.step='usage';s.path='/v1/usage';return [{json:s}];"
+      },
+      "position": [800, 0],
+      "id": "ac025390-0001-4000-a001-000000000007"
+    },
+    {
+      "name": "Prepare request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$input.first().json;\nfunction sorted(x){if(Array.isArray(x))return x.map(sorted);if(x&&typeof x==='object')return Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])]));return x;}\nconst identity={body:s.body,run_label:$('Configuration').first().json.run_label};\nif(s.step==='row')identity.client_product_id=s.body.client_product_id;\nreturn [{json:{...s,canonical:JSON.stringify(sorted(identity))}}];"
+      },
+      "position": [1020, 0],
+      "id": "ac025390-0001-4000-a001-000000000008"
+    },
+    {
+      "name": "Hash request",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "parameters": {
+        "action": "hash",
+        "type": "SHA256",
+        "value": "={{ $json.canonical }}",
+        "dataPropertyName": "digest",
+        "encoding": "hex"
+      },
+      "position": [1230, 0],
+      "id": "ac025390-0001-4000-a001-000000000009"
+    },
+    {
+      "name": "Handle response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const r=$input.first().json,s={...$('Hash request').last().json};\ndelete s.canonical;delete s.digest;\nconst status=Number(r.statusCode||0),attempt=s.attempt||0;\nconst header=r.headers?.['retry-after'];\nconst seconds=header==null?2**(attempt+1):/^\\d+(\\.\\d+)?$/.test(String(header))?Number(header):Math.max(0,(Date.parse(header)-Date.now())/1000);\nif(((!status&&r.error)||[500,502,503,504].includes(status))&&attempt<3&&Number.isFinite(seconds)&&seconds<=60)return [{json:{...s,route:'wait',delay:Math.max(1,Math.ceil(seconds)),attempt:attempt+1}}];\ns.attempt=0;\nlet b;try{b=JSON.parse(r.body);}catch{b=null;}\nconst failed=!b||status<200||status>=300;\nconst error=failed?String(b?.code||status||'transport error')+(status===410?' - set a new run_label and rerun':''):'';\nconst next=route=>[{json:{...s,route}}];\nif(s.step==='usage'){\n if(failed)throw new Error('Usage failed: '+error);\n const price=b.parameter_price;if(typeof price!=='number'||!Number.isFinite(price)||price<0)throw new Error('no price available for this account');\n s.approval_text=s.records.length+' rows x 3 parameters x '+price+' = '+(s.records.length*3*price)+' estimated Reach Dog tokens';\n return next('approve');}\nconst row=s.records[s.index];\nconst incomplete=!failed&&['product_type','missing_attributes','taxonomy_mappings'].some(k=>!(k in b));\ns.row={client_product_id:row.client_product_id,title:row.title,product_type:b?.product_type??'',\n missing_attributes:JSON.stringify(b?.missing_attributes??null),taxonomy_mappings:JSON.stringify(b?.taxonomy_mappings??null),\n charge_state:r.headers?.['x-charge-state']||'unavailable',charged_tokens:r.headers?.['x-charged-tokens']??'',\n error:error||(incomplete?'incomplete response':'')};\nreturn next('rows');"
+      },
+      "position": [1670, 0],
+      "id": "ac025390-0001-4000-a001-000000000011"
+    },
+    {
+      "name": "Needs approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'approve' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1890, 0],
+      "id": "ac025390-0001-4000-a001-000000000012"
+    },
+    {
+      "name": "Approval form",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Review feed estimate",
+        "formDescription": "={{ $json.approval_text }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Decision",
+              "fieldName": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Reject"
+                  },
+                  {
+                    "option": "Approve"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 15,
+        "resumeUnit": "minutes",
+        "options": {}
+      },
+      "position": [2100, -200],
+      "id": "ac025390-0001-4000-a001-000000000013"
+    },
+    {
+      "name": "Apply decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const reply=$input.first().json;if((reply.decision??reply.Decision)!=='Approve')return [];const s=$('Handle response').last().json;return [{json:{...s,step:'row',path:'/v1/title-matches',body:s.records[0]}}];"
+      },
+      "position": [2320, -200],
+      "id": "ac025390-0001-4000-a001-000000000014"
+    },
+    {
+      "name": "Needs delay?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'wait' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [2100, 80],
+      "id": "ac025390-0001-4000-a001-000000000015"
+    },
+    {
+      "name": "Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.delay }}",
+        "unit": "seconds"
+      },
+      "position": [2320, 80],
+      "id": "ac025390-0001-4000-a001-000000000016"
+    },
+    {
+      "name": "Result row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return [{json:$input.first().json.row}];"
+      },
+      "position": [2320, 280],
+      "id": "ac025390-0001-4000-a001-000000000017"
+    },
+    {
+      "name": "Write results",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Audit",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "client_product_id": "={{ $json.client_product_id }}",
+            "title": "={{ $json.title }}",
+            "product_type": "={{ $json.product_type }}",
+            "missing_attributes": "={{ $json.missing_attributes }}",
+            "taxonomy_mappings": "={{ $json.taxonomy_mappings }}",
+            "charge_state": "={{ $json.charge_state }}",
+            "charged_tokens": "={{ $json.charged_tokens }}",
+            "error": "={{ $json.error }}"
+          },
+          "matchingColumns": [
+            "client_product_id"
+          ],
+          "schema": [
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "product_type",
+              "displayName": "product_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "missing_attributes",
+              "displayName": "missing_attributes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "taxonomy_mappings",
+              "displayName": "taxonomy_mappings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "charge_state",
+              "displayName": "charge_state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "charged_tokens",
+              "displayName": "charged_tokens",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "position": [2530, 280],
+      "id": "ac025390-0001-4000-a001-000000000018"
+    },
+    {
+      "name": "Next row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$('Handle response').last().json;if(s.row.error)throw new Error(s.row.error);const index=s.index+1;return index<s.records.length?[{json:{...s,index,body:s.records[index]}}]:[];"
+      },
+      "position": [2750, 280],
+      "id": "ac025390-0001-4000-a001-000000000019"
+    },
+    {
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## Set up this workflow\nConfigure the HTTPS API origin, spreadsheet ID and credentials on the source, Reach Dog HTTP Request, and Google Sheets nodes. Create the tabs and columns described in the README. Start the workflow manually. Open the waiting execution's resume form, inspect the amount and choose Approve or Reject. The form expires after fifteen minutes. Keep the same run label when recovering an interrupted execution. Each unchanged request retains its idempotency key, and each completed product updates its existing sheet row. Change the run label only when you intend to purchase fresh results. Inspect the Excluded tab for records that need corrections.",
+        "width": 560,
+        "height": 310
+      },
+      "position": [0, -340],
+      "id": "ac025390-0001-4000-a001-000000000020"
+    },
+    {
+      "name": "Approval gate",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "The displayed quote or estimate belongs to this execution. Only an explicit Approve response enables the paid step.",
+        "width": 430,
+        "height": 110
+      },
+      "position": [1900, -360],
+      "id": "ac025390-0001-4000-a001-000000000021"
+    },
+    {
+      "name": "Create operation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ ['quote','row'].includes($json.step) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1330, 140],
+      "id": "ef33ef33-7777-4000-a123-000000000020"
+    },
+    {
+      "name": "Create at Reach Dog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Configuration').first().json.api_origin+$json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body",
+              "responseFormat": "text"
+            }
+          }
+        },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'rdn8n-audit-' + $json.digest }}"
+            }
+          ]
+        }
+      },
+      "position": [1490, 100],
+      "id": "ef33ef33-7777-4000-a123-000000000021",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Read from Reach Dog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Configuration').first().json.api_origin+$json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body",
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "position": [1510, 400],
+      "id": "ef33ef33-7777-4000-a123-000000000022",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {"node": "Configuration", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Configuration": {
+      "main": [
+        [
+          {"node": "Read source", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Read source": {
+      "main": [
+        [
+          {"node": "Prepare input", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Prepare input": {
+      "main": [
+        [
+          {"node": "Excluded rows", "type": "main", "index": 0},
+          {"node": "Begin request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Excluded rows": {
+      "main": [
+        [
+          {"node": "Write exclusions", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Begin request": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Prepare request": {
+      "main": [
+        [
+          {"node": "Hash request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Handle response": {
+      "main": [
+        [
+          {"node": "Needs approval?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Needs approval?": {
+      "main": [
+        [
+          {"node": "Approval form", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Needs delay?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Approval form": {
+      "main": [
+        [
+          {"node": "Apply decision", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Apply decision": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Needs delay?": {
+      "main": [
+        [
+          {"node": "Delay", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Result row", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Delay": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Result row": {
+      "main": [
+        [
+          {"node": "Write results", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Write results": {
+      "main": [
+        [
+          {"node": "Next row", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Next row": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Hash request": {
+      "main": [
+        [
+          {"node": "Create operation?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Create at Reach Dog": {
+      "main": [
+        [
+          {"node": "Handle response", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Create operation?": {
+      "main": [
+        [
+          {"node": "Create at Reach Dog", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Read from Reach Dog", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Read from Reach Dog": {
+      "main": [
+        [
+          {"node": "Handle response", "type": "main", "index": 0}
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

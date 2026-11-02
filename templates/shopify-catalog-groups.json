@@ -1,0 +1,905 @@
+{
+  "name": "Shopify catalog to groups sheet",
+  "nodes": [
+    {
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [0, 0],
+      "id": "ac025390-0001-4000-a001-000000000001"
+    },
+    {
+      "name": "Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "config-0",
+              "name": "api_origin",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-3",
+              "name": "run_label",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "config-4",
+              "name": "spreadsheet_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "position": [190, 0],
+      "id": "ac025390-0001-4000-a001-000000000002"
+    },
+    {
+      "name": "Read source",
+      "type": "n8n-nodes-base.shopify",
+      "typeVersion": 1,
+      "parameters": {
+        "resource": "product",
+        "operation": "getAll",
+        "returnAll": true,
+        "additionalFields": {}
+      },
+      "position": [380, 0],
+      "id": "ac025390-0001-4000-a001-000000000003"
+    },
+    {
+      "name": "Prepare input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const cfg=$('Configuration').first().json;\nif(!/^https:\\/\\/[a-z0-9.-]+(:\\d+)?$/i.test(cfg.api_origin)||!cfg.spreadsheet_id.trim())throw new Error('Set HTTPS API origin and spreadsheet ID');\nconst rows=$input.all().map(x=>x.json),records=[],excluded=[];\nif(rows.length>500)throw new Error('Store exceeds 500 products. No catalog submitted.');\nfor(const p of rows){const gid=String(p.admin_graphql_api_id||'').match(/^gid:\\/\\/shopify\\/Product\\/(\\d+)$/);\n const id=gid?.[1]??(Number.isSafeInteger(p.id)||typeof p.id==='string'?String(p.id):'');\n if(!/^\\d+$/.test(id))throw new Error('Invalid Shopify product ID');\n const client_product_id='shopify-'+id;\n if(!p.title?.trim()){excluded.push({source_row:client_product_id,client_product_id,reason:'missing title'});continue;}\n const body={client_product_id,title:p.title};if(p.body_html)body.description=p.body_html;records.push(body);}\nrecords.sort((a,b)=>a.client_product_id<b.client_product_id?-1:1);\nreturn [{json:{records,excluded}}];"
+      },
+      "position": [580, 0],
+      "id": "ac025390-0001-4000-a001-000000000004"
+    },
+    {
+      "name": "Excluded rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return $input.first().json.excluded.map(json=>({json}));"
+      },
+      "position": [800, 290],
+      "id": "ac025390-0001-4000-a001-000000000005"
+    },
+    {
+      "name": "Write exclusions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Excluded",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_row": "={{ $json.source_row }}",
+            "client_product_id": "={{ $json.client_product_id }}",
+            "reason": "={{ $json.reason }}"
+          },
+          "matchingColumns": [
+            "source_row"
+          ],
+          "schema": [
+            {
+              "id": "source_row",
+              "displayName": "source_row",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "position": [1010, 290],
+      "id": "ac025390-0001-4000-a001-000000000006"
+    },
+    {
+      "name": "Begin request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$input.first().json; if(!s.records.length)return [];delete s.excluded;s.step='quote';s.path='/v1/batches';s.body={workflow:'catalog_local_v1',records:s.records,parameters:['catalog_products','catalog_groups','group_members'],refine_probes:false};return [{json:s}];"
+      },
+      "position": [800, 0],
+      "id": "ac025390-0001-4000-a001-000000000007"
+    },
+    {
+      "name": "Prepare request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$input.first().json;\nfunction sorted(x){if(Array.isArray(x))return x.map(sorted);if(x&&typeof x==='object')return Object.fromEntries(Object.keys(x).sort().map(k=>[k,sorted(x[k])]));return x;}\nconst identity={body:s.body,run_label:$('Configuration').first().json.run_label};\nif(s.step==='row')identity.client_product_id=s.body.client_product_id;\nreturn [{json:{...s,canonical:JSON.stringify(sorted(identity))}}];"
+      },
+      "position": [1020, 0],
+      "id": "ac025390-0001-4000-a001-000000000008"
+    },
+    {
+      "name": "Hash request",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "parameters": {
+        "action": "hash",
+        "type": "SHA256",
+        "value": "={{ $json.canonical }}",
+        "dataPropertyName": "digest",
+        "encoding": "hex"
+      },
+      "position": [1230, 0],
+      "id": "ac025390-0001-4000-a001-000000000009"
+    },
+    {
+      "name": "Handle response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const r=$input.first().json,s={...$('Hash request').last().json};\ndelete s.canonical;delete s.digest;\nconst status=Number(r.statusCode||0),attempt=s.attempt||0;\nconst header=r.headers?.['retry-after'];\nconst seconds=header==null?2**(attempt+1):/^\\d+(\\.\\d+)?$/.test(String(header))?Number(header):Math.max(0,(Date.parse(header)-Date.now())/1000);\nif(((!status&&r.error)||[500,502,503,504].includes(status))&&attempt<3&&Number.isFinite(seconds)&&seconds<=60)return [{json:{...s,route:'wait',delay:Math.max(1,Math.ceil(seconds)),attempt:attempt+1}}];\ns.attempt=0;\nlet b;try{b=JSON.parse(r.body);}catch{b=null;}\nconst failed=!b||status<200||status>=300;\nconst error=failed?String(b?.code||status||'transport error')+(status===410?' - set a new run_label and rerun':''):'';\nconst next=route=>[{json:{...s,route}}];\nif(failed){s.error=error;return next('error');}\nif(s.step!=='page'){\n if(typeof b.id!=='string'||!b.id)throw new Error('Missing batch ID');\n s.batch_id=b.id;s.batch_path='/v1/batches/'+encodeURIComponent(b.id);\n if(b.billing?.state==='refused'||['failed','cancelled'].includes(b.status)){s.error=b.error?.code||b.status;return next('error');}\n if(b.status==='awaiting_acceptance'){\n  if(s.step!=='quote'||typeof b.billing.acceptance!=='string'||!Number.isFinite(b.billing.quote?.amount)||b.billing.quote.amount<0)throw new Error('Invalid catalog quote');\n  s.acceptance=b.billing.acceptance;s.approval_text=JSON.stringify(b.billing.quote);return next('approve');}\n if(b.status==='completed'){\n  if(!b.result_available||b.billing.state!=='settled'){s.error='results unavailable';return next('error');}\n  s.step='page';s.path=s.batch_path+'/results?page_size=100';s.outputs={catalog_groups:[],group_members:[],catalog_products:[]};s.cursors=[];return next('send');}\n if(!['queued','running','awaiting_quote'].includes(b.status)){s.error='Unknown status '+b.status;return next('error');}\n s.polls=(s.polls||0)+1;if(s.polls>360){s.error='Polling timed out for '+b.id;return next('error');}\n s.step='status';s.path=s.batch_path;s.delay=5;return next('wait');\n}\nfor(const name of Object.keys(s.outputs)){\n if(!Array.isArray(b.outputs?.[name]))throw new Error('Missing output '+name);\n s.outputs[name].push(...b.outputs[name]);}\nif(b.has_more===true){\n if(!b.next_cursor||s.cursors.includes(b.next_cursor))throw new Error('Invalid result cursor');\n s.cursors.push(b.next_cursor);s.path=s.batch_path+'/results?page_size=100&cursor='+encodeURIComponent(b.next_cursor);return next('send');}\nif(b.has_more!==false)throw new Error('Missing pagination flag');\nconst groups=new Map(s.outputs.catalog_groups.map(g=>[g.id,g.label])),members=new Map();\nfor(const g of s.outputs.group_members){\n if(!groups.has(g.id))throw new Error('Missing group label');\n for(const m of g.members){const ids=members.get(m.client_product_id)||[];ids.push(g.id);members.set(m.client_product_id,ids);}}\ns.rows=s.outputs.catalog_products.map(p=>{const ids=members.get(p.client_product_id)||[];\n return {client_product_id:p.client_product_id,title:p.title,group_id:ids.join('; '),group_label:ids.map(id=>groups.get(id)).join('; '),ungrouped:!ids.length};});\nreturn next('rows');"
+      },
+      "position": [1670, 0],
+      "id": "ac025390-0001-4000-a001-000000000011"
+    },
+    {
+      "name": "Needs approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'approve' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1890, 0],
+      "id": "ac025390-0001-4000-a001-000000000012"
+    },
+    {
+      "name": "Approval form",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "parameters": {
+        "resume": "form",
+        "formTitle": "Review catalog quote",
+        "formDescription": "={{ $json.approval_text }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Decision",
+              "fieldName": "decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Reject"
+                  },
+                  {
+                    "option": "Approve"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 15,
+        "resumeUnit": "minutes",
+        "options": {}
+      },
+      "position": [2100, -200],
+      "id": "ac025390-0001-4000-a001-000000000013"
+    },
+    {
+      "name": "Apply decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const reply=$input.first().json;if((reply.decision??reply.Decision)!=='Approve')return [];const s=$('Handle response').last().json;return [{json:{...s,step:'accept',path:s.batch_path+'/accept',body:{acceptance:s.acceptance}}}];"
+      },
+      "position": [2320, -200],
+      "id": "ac025390-0001-4000-a001-000000000014"
+    },
+    {
+      "name": "Needs delay?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'wait' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [2100, 80],
+      "id": "ac025390-0001-4000-a001-000000000015"
+    },
+    {
+      "name": "Delay",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $json.delay }}",
+        "unit": "seconds"
+      },
+      "position": [2320, 80],
+      "id": "ac025390-0001-4000-a001-000000000016"
+    },
+    {
+      "name": "Next page?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'send' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [2320, 260],
+      "id": "ac025390-0001-4000-a001-000000000017"
+    },
+    {
+      "name": "Catalog error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.route === 'error' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [2540, 330],
+      "id": "ac025390-0001-4000-a001-000000000018"
+    },
+    {
+      "name": "Error record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const s=$input.first().json;return [{json:{batch_id:s.batch_id||('execution-'+$execution.id),error:s.error}}];"
+      },
+      "position": [2770, 180],
+      "id": "ac025390-0001-4000-a001-000000000019"
+    },
+    {
+      "name": "Write failure",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Errors",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "batch_id": "={{ $json.batch_id }}",
+            "error": "={{ $json.error }}"
+          },
+          "matchingColumns": [
+            "batch_id"
+          ],
+          "schema": [
+            {
+              "id": "batch_id",
+              "displayName": "batch_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "position": [2980, 180],
+      "id": "ac025390-0001-4000-a001-000000000020"
+    },
+    {
+      "name": "Result rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return $input.first().json.rows.map(json=>({json}));"
+      },
+      "position": [2770, 420],
+      "id": "ac025390-0001-4000-a001-000000000021"
+    },
+    {
+      "name": "Write results",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.6,
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('Configuration').first().json.spreadsheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Groups",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "client_product_id": "={{ $json.client_product_id }}",
+            "title": "={{ $json.title }}",
+            "group_id": "={{ $json.group_id }}",
+            "group_label": "={{ $json.group_label }}",
+            "ungrouped": "={{ $json.ungrouped }}"
+          },
+          "matchingColumns": [
+            "client_product_id"
+          ],
+          "schema": [
+            {
+              "id": "client_product_id",
+              "displayName": "client_product_id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_id",
+              "displayName": "group_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_label",
+              "displayName": "group_label",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ungrouped",
+              "displayName": "ungrouped",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "position": [2980, 420],
+      "id": "ac025390-0001-4000-a001-000000000022"
+    },
+    {
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "## Set up this workflow\nConfigure the HTTPS API origin, spreadsheet ID and credentials on the source, Reach Dog HTTP Request, and Google Sheets nodes. Create the tabs and columns described in the README. Start the workflow manually. Open the waiting execution's resume form, inspect the amount and choose Approve or Reject. The form expires after fifteen minutes. Keep the same run label when recovering an interrupted execution. Each unchanged request retains its idempotency key, and each completed product updates its existing sheet row. Change the run label only when you intend to purchase fresh results. Inspect the Excluded tab for records that need corrections.",
+        "width": 560,
+        "height": 310
+      },
+      "position": [0, -340],
+      "id": "ac025390-0001-4000-a001-000000000023"
+    },
+    {
+      "name": "Approval gate",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "parameters": {
+        "content": "The displayed quote or estimate belongs to this execution. Only an explicit Approve response enables the paid step.",
+        "width": 430,
+        "height": 110
+      },
+      "position": [1900, -360],
+      "id": "ac025390-0001-4000-a001-000000000024"
+    },
+    {
+      "name": "Create operation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ ['quote','row'].includes($json.step) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1330, 140],
+      "id": "ef33ef33-7777-4000-a123-000000000023"
+    },
+    {
+      "name": "Create at Reach Dog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Configuration').first().json.api_origin+$json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body",
+              "responseFormat": "text"
+            }
+          }
+        },
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ 'rdn8n-catalog-' + $json.digest }}"
+            }
+          ]
+        }
+      },
+      "position": [1490, 100],
+      "id": "ef33ef33-7777-4000-a123-000000000024",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Read from Reach Dog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Configuration').first().json.api_origin+$json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": false,
+        "sendBody": false,
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body",
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "position": [1510, 400],
+      "id": "ef33ef33-7777-4000-a123-000000000025",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Accept quote?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "545aac25-48ec-454b-ad79-be8d31e388a4",
+              "leftValue": "={{ $json.step === 'accept' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "position": [1330, 280],
+      "id": "ef33ef33-7777-4000-a123-000000000026"
+    },
+    {
+      "name": "Accept at Reach Dog",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Configuration').first().json.api_origin+$json.path }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": false,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          },
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "outputPropertyName": "body",
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "position": [1510, 250],
+      "id": "ef33ef33-7777-4000-a123-000000000027",
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {"node": "Configuration", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Configuration": {
+      "main": [
+        [
+          {"node": "Read source", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Read source": {
+      "main": [
+        [
+          {"node": "Prepare input", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Prepare input": {
+      "main": [
+        [
+          {"node": "Excluded rows", "type": "main", "index": 0},
+          {"node": "Begin request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Excluded rows": {
+      "main": [
+        [
+          {"node": "Write exclusions", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Begin request": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Prepare request": {
+      "main": [
+        [
+          {"node": "Hash request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Handle response": {
+      "main": [
+        [
+          {"node": "Needs approval?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Needs approval?": {
+      "main": [
+        [
+          {"node": "Approval form", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Needs delay?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Approval form": {
+      "main": [
+        [
+          {"node": "Apply decision", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Apply decision": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Needs delay?": {
+      "main": [
+        [
+          {"node": "Delay", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Next page?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Delay": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Next page?": {
+      "main": [
+        [
+          {"node": "Prepare request", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Catalog error?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Catalog error?": {
+      "main": [
+        [
+          {"node": "Error record", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Result rows", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Error record": {
+      "main": [
+        [
+          {"node": "Write failure", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Result rows": {
+      "main": [
+        [
+          {"node": "Write results", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Hash request": {
+      "main": [
+        [
+          {"node": "Create operation?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Create at Reach Dog": {
+      "main": [
+        [
+          {"node": "Handle response", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Create operation?": {
+      "main": [
+        [
+          {"node": "Create at Reach Dog", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Accept quote?", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Read from Reach Dog": {
+      "main": [
+        [
+          {"node": "Handle response", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Accept at Reach Dog": {
+      "main": [
+        [
+          {"node": "Handle response", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Accept quote?": {
+      "main": [
+        [
+          {"node": "Accept at Reach Dog", "type": "main", "index": 0}
+        ],
+        [
+          {"node": "Read from Reach Dog", "type": "main", "index": 0}
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
