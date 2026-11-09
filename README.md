@@ -4,7 +4,7 @@ Use your existing [Reach Dog account and API key](https://platform.reach.dog/key
 
 - `shopify-catalog-groups.json` groups a Shopify catalog into collections.
 - `product-feed-audit.json` checks product types, missing attributes and taxonomy mappings from a feed.
-- `shopify-product-keywords.json` adds a new Shopify product’s search phrases and volume to Google Sheets.
+- `shopify-product-keywords.json` adds a new Shopify product's search phrases and volume to Google Sheets.
 
 The workflows and budget ledger are MIT licensed.
 

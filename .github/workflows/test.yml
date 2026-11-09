@@ -16,3 +16,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run package
+      - run: unzip -l dist/reachdog-n8n-templates-*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reachdog-n8n-templates-zip
+          path: dist/*.zip
