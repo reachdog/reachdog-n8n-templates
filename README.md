@@ -1,5 +1,13 @@
 # Reach Dog n8n templates
 
+Use your existing [Reach Dog account and API key](https://platform.reach.dog/keys) to run these workflows with your available tokens. Download a workflow JSON file from `templates/` and import it into your own n8n instance.
+
+- `shopify-catalog-groups.json` groups a Shopify catalog into collections.
+- `product-feed-audit.json` checks product types, missing attributes and taxonomy mappings from a feed.
+- `shopify-product-keywords.json` adds a new Shopify product's search phrases and volume to Google Sheets.
+
+The workflows and budget ledger are MIT licensed.
+
 ## Shopify product to keywords (Template 3)
 
 Import `templates/shopify-product-keywords.json` into n8n. The workflow starts inactive. A Shopify product creation triggers one Reach Dog title match for search phrases and volume. Results are upserted into Google Sheets by product ID.
@@ -37,4 +45,4 @@ Import `templates/product-feed-audit.json`. Set the API origin and spreadsheet I
 
 Review the estimate for the valid rows in the waiting execution's form. Approve permits the serial paid loop. A failed row is written before processing stops. Rerun with the same configuration to recover completed rows by request key. Protect access to the execution-specific approval link. The form expires after 15 minutes.
 
-For both templates, keep the workflow inactive during verification. Use `npm test` for the budget, form decision, paging and retry scenarios. With a local n8n installation, run `node tests/approval-smoke.mjs PATH_TO_N8N_BIN` to import both templates and exercise the graphs with mock sources, form decisions, APIs and sheets. After operator sign-off, connect a dev store and test spreadsheet and compare the catalog's settled quote and feed rows' settlement headers to the amounts shown.
+For both templates, keep the workflow inactive during verification. Use `npm test` for the budget, form decision, paging and retry scenarios. With a local n8n installation, run `node tests/approval-smoke.mjs PATH_TO_N8N_BIN` to import both templates and exercise the graphs with mock sources, form decisions, APIs and sheets. Connect your own store and spreadsheet when ready to run a workflow. Requests use your existing Reach Dog account and available tokens.
